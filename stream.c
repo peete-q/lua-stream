@@ -225,7 +225,9 @@ end:
 
 static int buffer_readobject(lua_State *L, const char *data, size_t pos, size_t size, struct reader_t *R)
 {
-	int op = data[pos++];
+	int op;
+	luaL_check(pos < size, "readobject overflow");
+	op = data[pos++];
 	switch(op & 0x0f)
 	{
 		case OP_NIL:
@@ -244,6 +246,7 @@ static int buffer_readobject(lua_State *L, const char *data, size_t pos, size_t 
 		{
 			int len = (op & 0xf0) >> 4;
 			lua_Integer n = 0;
+			luaL_check(pos + len < size, "read int overflow");
 			memcpy(&n, data + pos, len);
 			correctbytes(&n, len);
 			lua_pushnumber(L, n);
@@ -253,6 +256,7 @@ static int buffer_readobject(lua_State *L, const char *data, size_t pos, size_t 
 		case OP_FLOAT:
 		{
 			int len = (op & 0xf0) >> 4;
+			luaL_check(pos + len < size, "read float or double overflow");
 			if (len == sizeof(float))
 			{
 				float n = 0;
@@ -277,6 +281,7 @@ static int buffer_readobject(lua_State *L, const char *data, size_t pos, size_t 
 			memcpy(&n, data + pos, len);
 			correctbytes(&n, len);
 			pos += len;
+			luaL_check(pos + n < size, "read string overflow");
 			lua_pushlstring(L, data + pos, n);
 			pos += n;
 			break;
@@ -291,17 +296,14 @@ static int buffer_readobject(lua_State *L, const char *data, size_t pos, size_t 
 			R->refs[R->count++].idx = luaL_ref(L, LUA_REGISTRYINDEX);
 			for (i = 1; data[pos] != OP_TABLE_DELIMITER; ++i)
 			{
-				luaL_check(pos < size, "bad data, when read index %d:%d", pos, size);
 				pos = buffer_readobject(L, data, pos, size, R);
 				lua_rawseti(L, -2, i);
 			}
 			pos++;
 			while (data[pos] != OP_TABLE_END)
 			{
-				luaL_check(pos < size, "bad data, when read key %d:%d", pos, size);
 				pos = buffer_readobject(L, data, pos, size, R);
 				
-				luaL_check(pos < size, "bad data, when read value %d:%d", pos, size);
 				pos = buffer_readobject(L, data, pos, size, R);
 				lua_settable(L, -3);
 			}
@@ -354,37 +356,52 @@ static int lib_clone (lua_State *L)
 	return 1;
 }
 
-static int lib_writefrom (lua_State *L)
+static int lib_extract (lua_State *L)
 {
-	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LIB_NAME);
-	lua_Stream *other = (lua_Stream *)luaL_checkudata(L, 2, LIB_NAME);
-	size_t pos, size;
+	lua_Stream *self, *other;
+	int index = 1;
+	size_t pos, total, size;
+	self = (lua_Stream *)luaL_checkudata(L, index, LIB_NAME);
 	luaL_check(self->buf, "%s (released) #1", LIB_NAME);
-	luaL_check(other->buf, "%s (released) #2", LIB_NAME);
-	size = luaL_checkint(L, 3);
-	luaL_check(other->pos + size <= buffer_tell(&other->buf), "size overflow #3");
-	pos = buffer_tell(&self->buf);
-	buffer_write(&self->buf, buffer_at(&other->buf, other->pos), size);
+	if (lua_isnumber(L, index))
+		pos = lua_tonumber(L, ++index);
+	else
+		pos = buffer_tell(&self->buf);
+	other = (lua_Stream *)luaL_checkudata(L, ++index, LIB_NAME);
+	luaL_check(pos <= buffer_tell(&self->buf), "out of range #2");
+	luaL_check(other->buf, "%s (released) #%d", LIB_NAME, index);
+	total = buffer_tell(&other->buf);
+	size = luaL_optint(L, ++index, total > other->pos ? total - other->pos : 0);
+	luaL_check(other->pos + size <= total, "size overflow #%d", index);
+	if (size)
+		buffer_insert(&self->buf, pos, buffer_at(&other->buf, other->pos), size);
 	other->pos += size;
 	lua_pushnumber(L, pos);
-	lua_pushnumber(L, buffer_tell(&self->buf));
+	lua_pushnumber(L, pos + size);
 	return 2;
 }
 
-static int lib_insertfrom (lua_State *L)
+static int lib_copy (lua_State *L)
 {
-	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LIB_NAME);
-	lua_Stream *other = (lua_Stream *)luaL_checkudata(L, 3, LIB_NAME);
-	size_t where, size, pos = luaL_checkint(L, 2);
+	lua_Stream *self, *other;
+	int index = 1;
+	size_t pos, total, size;
+	self = (lua_Stream *)luaL_checkudata(L, index, LIB_NAME);
 	luaL_check(self->buf, "%s (released) #1", LIB_NAME);
+	if (lua_isnumber(L, index))
+		pos = lua_tonumber(L, ++index);
+	else
+		pos = buffer_tell(&self->buf);
+	other = (lua_Stream *)luaL_checkudata(L, ++index, LIB_NAME);
 	luaL_check(pos <= buffer_tell(&self->buf), "out of range #2");
-	luaL_check(other->buf, "%s (released) #3", LIB_NAME);
-	size = luaL_checkint(L, 4);
-	luaL_check(other->pos + size <= buffer_tell(&other->buf), "size overflow #4");
-	buffer_insert(&self->buf, pos, buffer_at(&other->buf, other->pos), size);
-	other->pos += size;
+	luaL_check(other->buf, "%s (released) #%d", LIB_NAME, index);
+	total = buffer_tell(&other->buf);
+	size = luaL_optint(L, ++index, total > other->pos ? total - other->pos : 0);
+	luaL_check(other->pos + size <= total, "size overflow #%d", index);
+	if (size)
+		buffer_insert(&self->buf, pos, buffer_at(&other->buf, other->pos), size);
 	lua_pushnumber(L, pos);
-	lua_pushnumber(L, buffer_tell(&self->buf));
+	lua_pushnumber(L, pos + size);
 	return 2;
 }
 
@@ -438,7 +455,7 @@ static int lib_insert (lua_State *L)
 	int i, top = lua_gettop(L);
 	struct writer_t W;
 	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LIB_NAME);
-	size_t pos = luaL_checkint(L, 2);
+	size_t size, pos = luaL_checkint(L, 2);
 	luaL_check(self->buf, "%s (released) #1", LIB_NAME);
 	luaL_check(pos <= buffer_tell(&self->buf), "out of range #2");
 	W.count = 0;
@@ -447,13 +464,18 @@ static int lib_insert (lua_State *L)
 		buffer_t buf = buffer_new(BUFF_SIZE);
 		for (i = 3, W.pos = 0; i <= top; ++i, W.pos = buffer_tell(&buf))
 			buffer_writeobject(L, &buf, i, &W);
-		buffer_insert(&self->buf, pos, buffer_ptr(&buf), buffer_tell(&buf));
+		size = buffer_tell(&buf);
+		buffer_insert(&self->buf, pos, buffer_ptr(&buf), size);
 		buffer_delete(&buf);
 	}
-	else for (i = 3, W.pos = pos; i <= top; ++i, W.pos = buffer_tell(&self->buf))
-		buffer_writeobject(L, &self->buf, i, &W);
+	else
+	{
+		for (i = 3, W.pos = pos; i <= top; ++i, W.pos = buffer_tell(&self->buf))
+			buffer_writeobject(L, &self->buf, i, &W);
+		size = buffer_tell(&self->buf) - pos;
+	}
 	lua_pushnumber(L, pos);
-	lua_pushnumber(L, buffer_tell(&self->buf));
+	lua_pushnumber(L, pos + size);
 	return 2;
 }
 
@@ -467,6 +489,7 @@ static int lib_read (lua_State *L)
 	R.pos = self->pos;
 	for (i = 0; i < nb; ++i, R.pos = self->pos)
 		self->pos = buffer_readobject(L, buffer_ptr(&self->buf), self->pos, buffer_tell(&self->buf), &R);
+
 	for (i = 0; i < R.count; ++i)
 		luaL_unref(L, LUA_REGISTRYINDEX, R.refs[i].idx);
 	return nb;
@@ -476,7 +499,7 @@ static int lib_remove (lua_State *L)
 {
 	int top = lua_gettop(L);
 	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LIB_NAME);
-	size_t size, pos;
+	size_t pos, size;
 	luaL_check(self->buf, "%s (released) #1", LIB_NAME);
 	pos = luaL_checkint(L, 2);
 	size = luaL_checkint(L, 3);
@@ -545,7 +568,19 @@ static const char *getnext(const char *f, const char *e)
 static size_t getsize(const char *f, const char *e)
 {
 	if (f < e)
-		return atoi(f);
+	{
+		switch (*f)
+		{
+			case 'b': case 'B':
+				return 1;
+			case 'w': case 'W':
+				return 2;
+			case 'd': case 'D':
+				return 4;
+			case 's':
+				return atoi(++f);
+		}
+	}
 	return 0;
 }
 
@@ -558,9 +593,9 @@ static int lib_writef (lua_State *L)
 	e = f + len;
 	luaL_check(self->buf, "%s (released) #1", LIB_NAME);
 	pos = buffer_tell(&self->buf);
-	for (; f < e; f = getnext(f, e))
+	for (; f < e; f = getnext(++f, e))
 	{
-		switch(*(f++))
+		switch(*f)
 		{
 		case F_SIGNED_BYTE:
 			{
@@ -649,70 +684,70 @@ static int lib_writef (lua_State *L)
 static int lib_insertf (lua_State *L)
 {
 	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LIB_NAME);
-	size_t len, i = 3, pos = luaL_checkint(L, 2);
+	size_t len, where, i = 3, pos = luaL_checkint(L, 2);
 	const char *f, *e;
 	f = luaL_checklstring(L, 3, &len);
 	e = f + len;
 	luaL_check(self->buf, "%s (released) #1", LIB_NAME);
 	luaL_check(pos <= buffer_tell(&self->buf), "out of range #2");
-	for (; f < e; f = getnext(f, e))
+	for (where = pos; f < e; f = getnext(++f, e))
 	{
-		switch(*(f++))
+		switch(*f)
 		{
 		case F_SIGNED_BYTE:
 			{
 				char n = luaL_checkinteger(L, ++i);
 				correctbytes(&n, sizeof(n));
-				buffer_insert(&self->buf, pos, &n, sizeof(n));
-				pos += sizeof(n);
+				buffer_insert(&self->buf, where, &n, sizeof(n));
+				where += sizeof(n);
 				break;
 			}
 		case F_UNSIGNED_BYTE:
 			{
 				unsigned char n = luaL_checkinteger(L, ++i);
 				correctbytes(&n, sizeof(n));
-				buffer_insert(&self->buf, pos, &n, sizeof(n));
-				pos += sizeof(n);
+				buffer_insert(&self->buf, where, &n, sizeof(n));
+				where += sizeof(n);
 				break;
 			}
 		case F_SIGNED_WORD:
 			{
 				short n = luaL_checkinteger(L, ++i);
 				correctbytes(&n, sizeof(n));
-				buffer_insert(&self->buf, pos, &n, sizeof(n));
-				pos += sizeof(n);
+				buffer_insert(&self->buf, where, &n, sizeof(n));
+				where += sizeof(n);
 				break;
 			}
 		case F_UNSIGNED_WORD:
 			{
 				unsigned short n = luaL_checkinteger(L, ++i);
 				correctbytes(&n, sizeof(n));
-				buffer_insert(&self->buf, pos, &n, sizeof(n));
-				pos += sizeof(n);
+				buffer_insert(&self->buf, where, &n, sizeof(n));
+				where += sizeof(n);
 				break;
 			}
 		case F_SIGNED_DWORD:
 			{
 				long n = luaL_checkinteger(L, ++i);
 				correctbytes(&n, sizeof(n));
-				buffer_insert(&self->buf, pos, &n, sizeof(n));
-				pos += sizeof(n);
+				buffer_insert(&self->buf, where, &n, sizeof(n));
+				where += sizeof(n);
 				break;
 			}
 		case F_UNSIGNED_DWORD:
 			{
 				unsigned long n = luaL_checkinteger(L, ++i);
 				correctbytes(&n, sizeof(n));
-				buffer_insert(&self->buf, pos, &n, sizeof(n));
-				pos += sizeof(n);
+				buffer_insert(&self->buf, where, &n, sizeof(n));
+				where += sizeof(n);
 				break;
 			}
 		case F_FLOAT:
 			{
 				lua_Number n = luaL_checknumber(L, ++i);
 				correctbytes(&n, sizeof(n));
-				buffer_insert(&self->buf, pos, &n, sizeof(n));
-				pos += sizeof(n);
+				buffer_insert(&self->buf, where, &n, sizeof(n));
+				where += sizeof(n);
 				break;
 			}
 		case F_ZSTRING:
@@ -720,9 +755,9 @@ static int lib_insertf (lua_State *L)
 				const char *s = luaL_checklstring(L, ++i, &len);
 				size_t sz = getsize(f, e);
 				if (sz == 0) sz = len;
-				buffer_insert(&self->buf, pos, s, sz);
-				buffer_insertbyte(&self->buf, pos, 0);
-				pos += sz + 1;
+				buffer_insert(&self->buf, where, s, sz);
+				buffer_insertbyte(&self->buf, where, 0);
+				where += sz + 1;
 				break;
 			}
 		case F_STRING:
@@ -730,21 +765,21 @@ static int lib_insertf (lua_State *L)
 				const char *s = luaL_checklstring(L, ++i, &len);
 				size_t sz = getsize(f, e);
 				if (sz == 0) sz = len;
-				buffer_insert(&self->buf, pos, s, sz);
-				pos += sz;
+				buffer_insert(&self->buf, where, s, sz);
+				where += sz;
 				break;
 			}
 		case F_OBJECT:
 			{
 				struct writer_t W;
 				W.count = 0;
-				if (pos < buffer_tell(&self->buf))
+				if (where < buffer_tell(&self->buf))
 				{
 					buffer_t buf = buffer_new(BUFF_SIZE);
 					W.pos = buffer_tell(&buf);
 					buffer_writeobject(L, &buf, ++i, &W);
-					buffer_insert(&self->buf, pos, buffer_ptr(&buf), buffer_tell(&buf));
-					pos += buffer_tell(&buf);
+					buffer_insert(&self->buf, where, buffer_ptr(&buf), buffer_tell(&buf));
+					where += buffer_tell(&buf);
 					buffer_delete(&buf);
 				}
 				else
@@ -760,7 +795,7 @@ static int lib_insertf (lua_State *L)
 		}
 	}
 	lua_pushnumber(L, pos);
-	lua_pushnumber(L, buffer_tell(&self->buf));
+	lua_pushnumber(L, where);
 	return 2;
 }
 
@@ -772,9 +807,10 @@ static int lib_readf (lua_State *L)
 	f = luaL_checklstring(L, 2, &len);
 	e = f + len;
 	luaL_check(self->buf, "%s (released) #1", LIB_NAME);
-	for (; f < e; f = getnext(f, e))
+	for (; f < e; f = getnext(++f, e))
 	{
-		switch(*(f++))
+		luaL_check(self->pos + getsize(f, e) <= buffer_tell(&self->buf), "read '%c' overflow", *f);
+		switch(*f)
 		{
 		case F_SIGNED_BYTE:
 			{
@@ -878,6 +914,8 @@ static int lib_readf (lua_State *L)
 static const struct luaL_Reg lib[] = {
 	{"new", lib_new},
 	{"clone", lib_clone},
+	{"extract", lib_extract},
+	{"copy", lib_copy},
 	{"write", lib_write},
 	{"insert", lib_insert},
 	{"read", lib_read},
@@ -893,8 +931,6 @@ static const struct luaL_Reg lib[] = {
 	{"readf", lib_readf},
 	{"tostring", lib_tostring},
 	{"release", lib_release},
-	{"writefrom", lib_writefrom},
-	{"insertfrom", lib_insertfrom},
 	{"__gc", lib_release},
 	{"__tostring", lib_mt_tostring},
 	{"__len", lib_size},

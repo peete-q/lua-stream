@@ -35,7 +35,8 @@ test(a == 's0' and b == 's1' and c == nil and d == false and e == 's2' and f == 
 
 local s2 = stream.new()
 print('------')
-local p1, p2 = s2:writefrom(s)
+s:seek(0)
+local p1, p2 = s2:extract(s)
 s2:insertf(0, "D", 1)
 local a = s2:readf("D")
 test(a == 1)
