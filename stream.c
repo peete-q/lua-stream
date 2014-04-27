@@ -28,7 +28,7 @@
 
 #define REFS_SIZE	256
 #define BUFF_SIZE	256
-#define LIB_NAME	"stream*"
+#define LUA_STREAM	"stream*"
 #define DEF_ENDIAN	1
 
 #define F_SIGNED_BYTE		'b'
@@ -334,25 +334,31 @@ static int buffer_readobject(lua_State *L, const char *data, size_t pos, size_t 
 
 static int luastream_new (lua_State *L)
 {
+	const char *buf;
+	int len;
+	buf = luaL_optlstring(L, 1, NULL, &len);
+	
 	lua_Stream *self = (lua_Stream *)lua_newuserdata(L, sizeof(lua_Stream));
 	self->buf = buffer_new(BUFF_SIZE);
 	self->pos = 0;
 	self->ref = LUA_REFNIL;
-	luaL_getmetatable(L, LIB_NAME);
+	luaL_getmetatable(L, LUA_STREAM);
 	lua_setmetatable(L, -2);
+	if (buf)
+		buffer_write(self->buf, buf, len);
 	return 1;
 }
 
 static int luastream_clone (lua_State *L)
 {
-	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LIB_NAME);
+	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LUA_STREAM);
 	lua_Stream *other = (lua_Stream *)lua_newuserdata(L, sizeof(lua_Stream));
-	luaL_check(self->buf, "%s (released) #1", LIB_NAME);
+	luaL_check(self->buf, "%s (released) #1", LUA_STREAM);
 	other->buf = buffer_new(buffer_tell(&self->buf));
 	other->pos = self->pos;
 	other->ref = LUA_REFNIL;
 	buffer_write(&other->buf, buffer_ptr(&self->buf), buffer_tell(&self->buf));
-	luaL_getmetatable(L, LIB_NAME);
+	luaL_getmetatable(L, LUA_STREAM);
 	lua_setmetatable(L, -2);
 	return 1;
 }
@@ -362,15 +368,15 @@ static int luastream_extract (lua_State *L)
 	lua_Stream *self, *other;
 	int index = 1;
 	size_t pos, total, size;
-	self = (lua_Stream *)luaL_checkudata(L, index, LIB_NAME);
-	luaL_check(self->buf, "%s (released) #1", LIB_NAME);
+	self = (lua_Stream *)luaL_checkudata(L, index, LUA_STREAM);
+	luaL_check(self->buf, "%s (released) #1", LUA_STREAM);
 	if (lua_isnumber(L, index))
 		pos = lua_tonumber(L, ++index);
 	else
 		pos = buffer_tell(&self->buf);
-	other = (lua_Stream *)luaL_checkudata(L, ++index, LIB_NAME);
+	other = (lua_Stream *)luaL_checkudata(L, ++index, LUA_STREAM);
 	luaL_check(pos <= buffer_tell(&self->buf), "out of range #2");
-	luaL_check(other->buf, "%s (released) #%d", LIB_NAME, index);
+	luaL_check(other->buf, "%s (released) #%d", LUA_STREAM, index);
 	total = buffer_tell(&other->buf);
 	size = luaL_optint(L, ++index, total > other->pos ? total - other->pos : 0);
 	luaL_check(other->pos + size <= total, "size overflow #%d", index);
@@ -387,15 +393,15 @@ static int luastream_copy (lua_State *L)
 	lua_Stream *self, *other;
 	int index = 1;
 	size_t pos, total, size;
-	self = (lua_Stream *)luaL_checkudata(L, index, LIB_NAME);
-	luaL_check(self->buf, "%s (released) #1", LIB_NAME);
+	self = (lua_Stream *)luaL_checkudata(L, index, LUA_STREAM);
+	luaL_check(self->buf, "%s (released) #1", LUA_STREAM);
 	if (lua_isnumber(L, index))
 		pos = lua_tonumber(L, ++index);
 	else
 		pos = buffer_tell(&self->buf);
-	other = (lua_Stream *)luaL_checkudata(L, ++index, LIB_NAME);
+	other = (lua_Stream *)luaL_checkudata(L, ++index, LUA_STREAM);
 	luaL_check(pos <= buffer_tell(&self->buf), "out of range #2");
-	luaL_check(other->buf, "%s (released) #%d", LIB_NAME, index);
+	luaL_check(other->buf, "%s (released) #%d", LUA_STREAM, index);
 	total = buffer_tell(&other->buf);
 	size = luaL_optint(L, ++index, total > other->pos ? total - other->pos : 0);
 	luaL_check(other->pos + size <= total, "size overflow #%d", index);
@@ -408,7 +414,7 @@ static int luastream_copy (lua_State *L)
 
 static int luastream_release (lua_State *L)
 {
-	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LIB_NAME);
+	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LUA_STREAM);
 	if (self->buf)
 		buffer_delete(&self->buf);
 	return 0;
@@ -416,17 +422,17 @@ static int luastream_release (lua_State *L)
 
 static int luastream_mt_tostring (lua_State *L)
 {
-	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LIB_NAME);
+	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LUA_STREAM);
 	if (self->buf)
-		lua_pushfstring(L, "%s (%p)", LIB_NAME, self);
+		lua_pushfstring(L, "%s (%p)", LUA_STREAM, self);
 	else
-		lua_pushfstring(L, "%s (released)", LIB_NAME);
+		lua_pushfstring(L, "%s (released)", LUA_STREAM);
 	return 1;
 }
 
 static int luastream_tostring (lua_State *L)
 {
-	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LIB_NAME);
+	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LUA_STREAM);
 	if (self->buf)
 		lua_pushlstring(L, buffer_ptr(&self->buf), buffer_tell(&self->buf));
 	else
@@ -439,8 +445,8 @@ static int luastream_write (lua_State *L)
 	size_t pos;
 	int i, top = lua_gettop(L);
 	struct writer_t W;
-	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LIB_NAME);
-	luaL_check(self->buf, "%s (released) #1", LIB_NAME);
+	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LUA_STREAM);
+	luaL_check(self->buf, "%s (released) #1", LUA_STREAM);
 	pos = buffer_tell(&self->buf);
 	W.count = 0;
 	W.pos = pos;
@@ -455,9 +461,9 @@ static int luastream_insert (lua_State *L)
 {
 	int i, top = lua_gettop(L);
 	struct writer_t W;
-	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LIB_NAME);
+	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LUA_STREAM);
 	size_t size, pos = luaL_checkint(L, 2);
-	luaL_check(self->buf, "%s (released) #1", LIB_NAME);
+	luaL_check(self->buf, "%s (released) #1", LUA_STREAM);
 	luaL_check(pos <= buffer_tell(&self->buf), "out of range #2");
 	W.count = 0;
 	if (pos < buffer_tell(&self->buf))
@@ -483,9 +489,9 @@ static int luastream_insert (lua_State *L)
 static int luastream_read (lua_State *L)
 {
 	struct reader_t R;
-	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LIB_NAME);
+	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LUA_STREAM);
 	size_t i, pos, nb = luaL_optint(L, 2, 1);
-	luaL_check(self->buf, "%s (released) #1", LIB_NAME);
+	luaL_check(self->buf, "%s (released) #1", LUA_STREAM);
 	R.count = 0;
 	R.pos = self->pos;
 	for (i = 0; i < nb; ++i, R.pos = self->pos)
@@ -499,9 +505,9 @@ static int luastream_read (lua_State *L)
 static int luastream_remove (lua_State *L)
 {
 	int top = lua_gettop(L);
-	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LIB_NAME);
+	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LUA_STREAM);
 	size_t pos, size;
-	luaL_check(self->buf, "%s (released) #1", LIB_NAME);
+	luaL_check(self->buf, "%s (released) #1", LUA_STREAM);
 	pos = luaL_checkint(L, 2);
 	size = luaL_checkint(L, 3);
 	stream_remove(self, pos, size);
@@ -510,9 +516,9 @@ static int luastream_remove (lua_State *L)
 
 static int luastream_seek (lua_State *L)
 {
-	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LIB_NAME);
+	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LUA_STREAM);
 	size_t pos = luaL_checkint(L, 2);
-	luaL_check(self->buf, "%s (released) #1", LIB_NAME);
+	luaL_check(self->buf, "%s (released) #1", LUA_STREAM);
 	luaL_check(pos <= buffer_tell(&self->buf), "out of range #2");
 	self->pos = pos;
 	return 0;
@@ -520,31 +526,31 @@ static int luastream_seek (lua_State *L)
 
 static int luastream_tell (lua_State *L)
 {
-	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LIB_NAME);
-	luaL_check(self->buf, "%s (released) #1", LIB_NAME);
+	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LUA_STREAM);
+	luaL_check(self->buf, "%s (released) #1", LUA_STREAM);
 	lua_pushnumber(L, self->pos);
 	return 1;
 }
 
 static int luastream_unread (lua_State *L)
 {
-	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LIB_NAME);
-	luaL_check(self->buf, "%s (released) #1", LIB_NAME);
+	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LUA_STREAM);
+	luaL_check(self->buf, "%s (released) #1", LUA_STREAM);
 	lua_pushnumber(L, buffer_tell(&self->buf) - self->pos);
 	return 1;
 }
 
 static int luastream_size (lua_State *L)
 {
-	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LIB_NAME);
-	luaL_check(self->buf, "%s (released) #1", LIB_NAME);
+	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LUA_STREAM);
+	luaL_check(self->buf, "%s (released) #1", LUA_STREAM);
 	lua_pushnumber(L, buffer_tell(&self->buf));
 	return 1;
 }
 
 static int luastream_empty (lua_State *L)
 {
-	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LIB_NAME);
+	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LUA_STREAM);
 	if (!self->buf)
 		lua_pushnil(L);
 	else
@@ -554,8 +560,8 @@ static int luastream_empty (lua_State *L)
 
 static int luastream_eof (lua_State *L)
 {
-	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LIB_NAME);
-	luaL_check(self->buf, "%s (released) #1", LIB_NAME);
+	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LUA_STREAM);
+	luaL_check(self->buf, "%s (released) #1", LUA_STREAM);
 	lua_pushboolean(L, self->pos >= buffer_tell(&self->buf));
 	return 1;
 }
@@ -587,12 +593,12 @@ static size_t getsize(const char *f, const char *e)
 
 static int luastream_writef (lua_State *L)
 {
-	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LIB_NAME);
+	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LUA_STREAM);
 	size_t len, pos, i = 2;
 	const char *f, *e;
 	f = luaL_checklstring(L, 2, &len);
 	e = f + len;
-	luaL_check(self->buf, "%s (released) #1", LIB_NAME);
+	luaL_check(self->buf, "%s (released) #1", LUA_STREAM);
 	pos = buffer_tell(&self->buf);
 	for (; f < e; f = getnext(++f, e))
 	{
@@ -684,12 +690,12 @@ static int luastream_writef (lua_State *L)
 
 static int luastream_insertf (lua_State *L)
 {
-	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LIB_NAME);
+	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LUA_STREAM);
 	size_t len, where, i = 3, pos = luaL_checkint(L, 2);
 	const char *f, *e;
 	f = luaL_checklstring(L, 3, &len);
 	e = f + len;
-	luaL_check(self->buf, "%s (released) #1", LIB_NAME);
+	luaL_check(self->buf, "%s (released) #1", LUA_STREAM);
 	luaL_check(pos <= buffer_tell(&self->buf), "out of range #2");
 	for (where = pos; f < e; f = getnext(++f, e))
 	{
@@ -802,12 +808,12 @@ static int luastream_insertf (lua_State *L)
 
 static int luastream_readf (lua_State *L)
 {
-	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LIB_NAME);
+	lua_Stream *self = (lua_Stream *)luaL_checkudata(L, 1, LUA_STREAM);
 	size_t len, nb = 0;
 	const char *f, *e;
 	f = luaL_checklstring(L, 2, &len);
 	e = f + len;
-	luaL_check(self->buf, "%s (released) #1", LIB_NAME);
+	luaL_check(self->buf, "%s (released) #1", LUA_STREAM);
 	for (; f < e; f = getnext(++f, e))
 	{
 		luaL_check(self->pos + getsize(f, e) <= buffer_tell(&self->buf), "read '%c' overflow", *f);
@@ -940,7 +946,7 @@ static const struct luaL_Reg funcs[] = {
 
 LUALIB_API int luaopen_stream (lua_State *L)
 {
-	luaL_newmetatable(L, LIB_NAME);
+	luaL_newmetatable(L, LUA_STREAM);
 	lua_pushvalue(L, -1);
 	lua_setfield(L, -2, "__index");
 	luaL_register(L, NULL, funcs);
@@ -964,7 +970,7 @@ lua_Stream *stream_new(lua_State *L)
 	lua_Stream *self = (lua_Stream *)lua_newuserdata(L, sizeof(lua_Stream));
 	self->buf = buffer_new(BUFF_SIZE);
 	self->pos = 0;
-	luaL_getmetatable(L, LIB_NAME);
+	luaL_getmetatable(L, LUA_STREAM);
 	lua_setmetatable(L, -2);
 	self->ref = luaL_ref(L, LUA_REGISTRYINDEX);
 }
@@ -974,7 +980,7 @@ lua_Stream *stream_ref(lua_State *L, int index)
 	lua_Stream *self;
 	if (lua_isnoneornil(L, index))
 		return NULL;
-	self = (lua_Stream *)luaL_checkudata(L, index, LIB_NAME);
+	self = (lua_Stream *)luaL_checkudata(L, index, LUA_STREAM);
 	lua_pushvalue(L, index);
 	self->ref = luaL_ref(L, LUA_REGISTRYINDEX);
 	return self;
